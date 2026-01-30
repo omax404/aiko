@@ -1,0 +1,11 @@
+{
+    "username": "User",
+    "theme_mode": "dark",
+    "vts_port": "8001",
+    "tts_enabled": true,
+    "last_model": "deepseekv3.1:671b-cloud",
+    "proactive_mode": false,
+    "discord_enabled": false,
+    "telegram_enabled": false,
+    "obsidian_path": ""
+}
