@@ -25,15 +25,15 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-async def get_hub_response(message: str, user_id: str):
+async def get_hub_response(message: str, user_id: str, attachments: list = None):
     """Call the Neural Hub for Aiko's brain."""
     try:
         async with aiohttp.ClientSession() as session:
-            payload = {"message": message, "user_id": str(user_id)}
+            payload = {"message": message, "user_id": str(user_id), "attachments": attachments or []}
             async with session.post(f"{HUB_URL}/api/chat", json=payload, timeout=90) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("response"), data.get("emotion"), data.get("audio_url")
+                    return data.get("response"), data.get("emotion"), data.get("audio_path")
                 else:
                     return "Master, my neural links are fuzzy right now...", "sad", None
     except Exception as e:
@@ -66,21 +66,28 @@ async def on_message(message):
             # Metadata for persona recognition
             meta_prefix = f"[DISCORD_METADATA: Handle: {message.author.name}, Name: {message.author.display_name}, Status: {'MASTER' if message.author.id == int(os.getenv('MASTER_ID',0)) else 'member'}] "
             
-            full_msg = meta_prefix + clean_text
+            # 1. Download image attachments locally to pipe into Moondream Vision
+            local_attachments = []
+            os.makedirs("data/uploads", exist_ok=True)
+            for a in message.attachments:
+                if 'image' in a.content_type:
+                    ext = a.filename.split('.')[-1]
+                    path = f"data/uploads/discord_{message.id}.{ext}"
+                    await a.save(path)
+                    local_attachments.append(os.path.abspath(path))
             
-            response, emotion, audio_url = await get_hub_response(full_msg, message.author.id)
+            response, emotion, audio_path = await get_hub_response(full_msg, message.author.id, local_attachments)
             
             audio_file = None
-            if audio_url:
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(audio_url) as file_resp:
-                            if file_resp.status == 200:
-                                audio_data = await file_resp.read()
-                                import io
-                                audio_file = discord.File(io.BytesIO(audio_data), filename="aiko_voice.mp3")
-                except Exception as e:
-                    logger.error(f"Failed to fetch audio for Discord: {e}")
+            if audio_path and os.path.exists(audio_path):
+                # If Aiko is sitting in a Voice Channel on this server, speak mechanically to the channel!
+                voice_client = message.guild.voice_client if message.guild else None
+                if voice_client and voice_client.is_connected():
+                    if not voice_client.is_playing():
+                        voice_client.play(discord.FFmpegPCMAudio(audio_path))
+                
+                # Attach file mapping for text-channel
+                audio_file = discord.File(audio_path, filename="aiko_voice.wav")
             
             if audio_file:
                 await message.reply(response, file=audio_file)

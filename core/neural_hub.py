@@ -351,14 +351,15 @@ async def handle_chat_api(req):
         data = await req.json()
         msg = data.get("message", "").strip()
         uid = data.get("user_id", USER_ID)
+        attachments = data.get("attachments", [])
         
-        if not msg: return web.json_response({"error": "Empty message"}, status=400)
+        if not msg and not attachments: return web.json_response({"error": "Empty message"}, status=400)
         
         # Broadcast that Aiko is thinking
         await broadcast_event("state", {"thinking": True, "source": "api"})
         await sync_star_office("researching", f"Thinking about: {msg[:20]}...")
         
-        reply, *_ = await brain.chat(msg, user_id=uid)
+        reply, *_ = await brain.chat(msg, user_id=uid, initial_images=attachments)
         emotion = detect_emotion(reply)
         
         audio_filename = None
@@ -375,6 +376,7 @@ async def handle_chat_api(req):
             "response": reply,
             "emotion": emotion,
             "audio_url": f"http://127.0.0.1:8000/api/tts/audio/{audio_filename}" if audio_filename else None,
+            "audio_path": os.path.join(os.getcwd(), "data", "voices", audio_filename) if audio_filename else None,
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:

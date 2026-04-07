@@ -22,15 +22,15 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 MASTER_ID = int(os.getenv("MASTER_ID", "0"))
 HUB_URL = "http://127.0.0.1:8000"
 
-async def get_hub_response(message: str, user_id: int):
+async def get_hub_response(message: str, user_id: int, attachments: list = None):
     try:
         async with aiohttp.ClientSession() as session:
-            payload = {"message": message, "user_id": str(user_id)}
+            payload = {"message": message, "user_id": str(user_id), "attachments": attachments or []}
             # Increase timeout for long responses
             async with session.post(f"{HUB_URL}/api/chat", json=payload, timeout=90) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("response"), data.get("audio_url")
+                    return data.get("response"), data.get("audio_path")
     except Exception as e:
         logger.error(f"Hub connection error: {e}")
     return "I can't reach my brain... *pouts*", None
@@ -58,34 +58,46 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return  # Ignore group noise unless called
 
     user = update.message.from_user
-    text = update.message.text
+    text = update.message.text or update.message.caption or ""
     
     # Send "Typing..." action
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
+    # Pre-process image payloads for Aiko
+    local_attachments = []
+    os.makedirs("data/uploads", exist_ok=True)
+    if update.message.photo:
+        # Grabs the highest resolution version
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        path = f"data/uploads/telegram_{update.message.message_id}.jpg"
+        await file.download_to_drive(path)
+        local_attachments.append(os.path.abspath(path))
+        
+        # If photo is sent without text, synthesize a placeholder
+        if not text:
+            text = "[System: User sent an image]"
+
     # Metadata for persona recognition
     meta_prefix = f"[TELEGRAM_METADATA: Handle: @{user.username}, Name: {user.full_name}, ChatType: {chat_type}, Status: {'MASTER' if user.id == MASTER_ID else 'guest'}] "
     
     full_msg = meta_prefix + text
-    response, audio_url = await get_hub_response(full_msg, user.id)
+    response, audio_path = await get_hub_response(full_msg, user.id, local_attachments)
     
     if not response: 
         response = "My brain is empty... *confused fox noise*"
 
-    # Send Voice Note first
-    if audio_url:
+    # Send Voice Note physically from disk
+    if audio_path and os.path.exists(audio_path):
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(audio_url) as file_resp:
-                    if file_resp.status == 200:
-                        audio_data = await file_resp.read()
-                        await context.bot.send_voice(
-                            chat_id=update.effective_chat.id, 
-                            voice=audio_data, 
-                            reply_to_message_id=update.message.message_id
-                        )
+            with open(audio_path, 'rb') as audio_file:
+                await context.bot.send_voice(
+                    chat_id=update.effective_chat.id, 
+                    voice=audio_file, 
+                    reply_to_message_id=update.message.message_id
+                )
         except Exception as e:
-            logger.error(f"Voice Note Error: {e}")
+            logger.error(f"Voice Note Local Auth Error: {e}")
 
     # Split and send text
     chunks = split_message(response)
