@@ -107,7 +107,12 @@ class VisionEngine:
         img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
         
         provider = config.get("PROVIDER", "Ollama")
-        model = config.get("VISION_MODEL") or config.get("MODEL_NAME", "moondream")
+        # Ensure we don't accidentally send image bytes to a Text-Only LLM (like Gemma4 or Qwen).
+        model = config.get("VISION_MODEL")
+        if not model:
+            # If no Vision Model is explicitly set, default strictly to moondream for vision.
+            model = "moondream"
+
         
         try:
             loop = asyncio.get_event_loop()

@@ -23,10 +23,12 @@ class VoiceEngine:
         try:
             logger.info("📡 Loading Pocket-TTS Model (this may take a moment)...")
             self.model = TTSModel.load_model()
-            # Default to 'alba' voice as a reliable starter
-            self.voice_state = self.model.get_state_for_audio_prompt("alba")
+            # Loading CUSTOM CLONED AUDIO
+            clone_path = r"C:\Users\ousmo\.gemini\antigravity\scratch\Aiko-desktop\voice_preview_yuki.mp3"
+            logger.info(f"📡 Generating Voice State from clone: {clone_path}")
+            self.voice_state = self.model.get_state_for_audio_prompt(clone_path)
             self.is_ready = True
-            logger.info("✅ Pocket-TTS Engine Loaded & Ready.")
+            logger.info("✅ Pocket-TTS Engine Loaded & Ready with Yuki's Voice Clone.")
         except Exception as e:
             logger.error(f"❌ Failed to load Pocket-TTS: {e}")
 
@@ -37,6 +39,7 @@ class VoiceEngine:
         import re
         text = re.sub(r'http\S+', 'link', text)
         text = re.sub(r'```.*?```', 'code block', text, flags=re.DOTALL)
+        text = re.sub(r'<emotion>.*?</emotion>', '', text, flags=re.IGNORECASE)
         text = re.sub(r'`.*?`', 'code', text)
         text = re.sub(r'\*[^*]+\*', '', text)
         # Pocket-TTS works best with clean, plain text
@@ -77,3 +80,5 @@ class VoiceEngine:
             logger.error(f"❌ Voice generation error: {e}")
         finally:
             self.is_speaking = False
+
+voice_engine = VoiceEngine()

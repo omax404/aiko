@@ -30,10 +30,10 @@ async def get_hub_response(message: str, user_id: int):
             async with session.post(f"{HUB_URL}/api/chat", json=payload, timeout=90) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("response")
+                    return data.get("response"), data.get("audio_url")
     except Exception as e:
         logger.error(f"Hub connection error: {e}")
-    return "I can't reach my brain... *pouts*"
+    return "I can't reach my brain... *pouts*", None
 
 def split_message(text, limit=4000):
     """Splits long messages for Telegram."""
@@ -67,18 +67,32 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     meta_prefix = f"[TELEGRAM_METADATA: Handle: @{user.username}, Name: {user.full_name}, ChatType: {chat_type}, Status: {'MASTER' if user.id == MASTER_ID else 'guest'}] "
     
     full_msg = meta_prefix + text
-    response = await get_hub_response(full_msg, user.id)
+    response, audio_url = await get_hub_response(full_msg, user.id)
     
     if not response: 
         response = "My brain is empty... *confused fox noise*"
 
-    # Split and send
+    # Send Voice Note first
+    if audio_url:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(audio_url) as file_resp:
+                    if file_resp.status == 200:
+                        audio_data = await file_resp.read()
+                        await context.bot.send_voice(
+                            chat_id=update.effective_chat.id, 
+                            voice=audio_data, 
+                            reply_to_message_id=update.message.message_id
+                        )
+        except Exception as e:
+            logger.error(f"Voice Note Error: {e}")
+
+    # Split and send text
     chunks = split_message(response)
     for chunk in chunks:
         try:
             await update.message.reply_text(chunk, parse_mode='Markdown' if '```' in chunk else None)
         except Exception as e:
-            # Fallback if Markdown fails (e.g. malformed LaTeX)
             await update.message.reply_text(chunk)
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

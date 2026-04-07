@@ -361,12 +361,20 @@ async def handle_chat_api(req):
         reply, *_ = await brain.chat(msg, user_id=uid)
         emotion = detect_emotion(reply)
         
+        audio_filename = None
+        if config.get("TTS_ENABLED", True):
+            async def _on_audio(fname):
+                nonlocal audio_filename
+                audio_filename = fname
+            await voice_engine.speak(reply, emotion=emotion, on_audio=_on_audio)
+            
         await broadcast_event("state", {"thinking": False})
         await sync_star_office("idle", "Waiting for command...")
         
         return web.json_response({
             "response": reply,
             "emotion": emotion,
+            "audio_url": f"http://127.0.0.1:8000/api/tts/audio/{audio_filename}" if audio_filename else None,
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:

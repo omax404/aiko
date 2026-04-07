@@ -30,15 +30,15 @@ async def get_hub_response(message: str, user_id: str):
     try:
         async with aiohttp.ClientSession() as session:
             payload = {"message": message, "user_id": str(user_id)}
-            async with session.post(f"{HUB_URL}/api/chat", json=payload, timeout=60) as resp:
+            async with session.post(f"{HUB_URL}/api/chat", json=payload, timeout=90) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("response"), data.get("emotion")
+                    return data.get("response"), data.get("emotion"), data.get("audio_url")
                 else:
-                    return "Master, my neural links are fuzzy right now...", "sad"
+                    return "Master, my neural links are fuzzy right now...", "sad", None
     except Exception as e:
         logger.error(f"Hub connection error: {e}")
-        return "I can't reach my brain! Help me, Master!", "confused"
+        return "I can't reach my brain! Help me, Master!", "confused", None
 
 @bot.event
 async def on_ready():
@@ -68,8 +68,24 @@ async def on_message(message):
             
             full_msg = meta_prefix + clean_text
             
-            response, emotion = await get_hub_response(full_msg, message.author.id)
-            await message.reply(response)
+            response, emotion, audio_url = await get_hub_response(full_msg, message.author.id)
+            
+            audio_file = None
+            if audio_url:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(audio_url) as file_resp:
+                            if file_resp.status == 200:
+                                audio_data = await file_resp.read()
+                                import io
+                                audio_file = discord.File(io.BytesIO(audio_data), filename="aiko_voice.mp3")
+                except Exception as e:
+                    logger.error(f"Failed to fetch audio for Discord: {e}")
+            
+            if audio_file:
+                await message.reply(response, file=audio_file)
+            else:
+                await message.reply(response)
 
     await bot.process_commands(message)
 
