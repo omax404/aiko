@@ -22,12 +22,15 @@ class PCManager:
     
     def __init__(self):
         self.username = getpass.getuser()
+        home = Path.home()
+        
+        # Cross-platform path resolution
         self.user_paths = {
-            "downloads": rf"C:\Users\{self.username}\Downloads",
-            "desktop": rf"C:\Users\{self.username}\Desktop",
-            "documents": rf"C:\Users\{self.username}\Documents",
-            "pictures": rf"C:\Users\{self.username}\Pictures",
-            "videos": rf"C:\Users\{self.username}\Videos",
+            "downloads": str(home / "Downloads"),
+            "desktop": str(home / "Desktop"),
+            "documents": str(home / "Documents"),
+            "pictures": str(home / "Pictures"),
+            "videos": str(home / "Videos"),
         }
         
     def get_folder_path(self, folder_name: str) -> str:
@@ -61,7 +64,13 @@ class PCManager:
             if not os.path.exists(path):
                 return "I can't open something that isn't there, Master! 😖"
                 
-            os.startfile(path)
+            if os.name == 'nt':
+                os.startfile(path)
+            elif os.name == 'posix':
+                import sys
+                cmd = 'open' if sys.platform == 'darwin' else 'xdg-open'
+                subprocess.Popen([cmd, path])
+            
             return f"I've opened {os.path.basename(path)} for you! ✨"
             
         except Exception as e:
@@ -165,18 +174,18 @@ class PCManager:
         try:
             cmd = app_map.get(app_name.lower(), app_name)
             
-            # Windows specific 'start' command for better resolution
             if os.name == 'nt':
-                # Use start "" "cmd" to handle quotes and titles safely
-                full_cmd = f'start "" "{cmd}"' if " " in cmd else f'start {cmd}'
-                # But for simple apps like 'chrome', 'start chrome' works better than Popen('chrome')
                 subprocess.Popen(f"start {cmd}", shell=True)
-            else:
-                subprocess.Popen(cmd, shell=True)
+            elif os.name == 'posix':
+                import sys
+                if sys.platform == 'darwin':
+                    subprocess.Popen(["open", "-a", cmd])
+                else:
+                    subprocess.Popen(cmd, shell=True)
                 
             return f"I've launched {app_name} for you, Master! ✨"
         except Exception as e:
-            print(f" [PC] Launch Error: {e}")
+            logger.error(f" [PC] Launch Error: {e}")
             return f"I couldn't find that app... {str(e)}"
             
     def get_folder_stats(self, folder_name: str) -> dict:
@@ -228,39 +237,43 @@ class PCManager:
         except Exception as e: return f"Type Error: {e}"
 
     def set_wallpaper(self, image_name_or_path: str) -> str:
-        """Change desktop wallpaper (Windows only)."""
+        """Change desktop wallpaper (Cross-platform support)."""
         try:
-            import ctypes
-            
             # Resolve Path
             target_path = image_name_or_path
             if not os.path.exists(target_path):
-                # Check user folders
                 candidates = [
                     os.path.join(self.user_paths["pictures"], image_name_or_path),
-                    os.path.join(self.user_paths["downloads"], image_name_or_path),
-                    os.path.join(self.user_paths["pictures"], "Wallpapers", image_name_or_path)
+                    os.path.join(self.user_paths["downloads"], image_name_or_path)
                 ]
                 for c in candidates:
-                    if os.path.exists(c):
-                        target_path = c
-                        break
-                    # Try with extensions
-                    for ext in [".jpg", ".png", ".jpeg", ".bmp"]:
-                        if os.path.exists(c + ext):
-                            target_path = c + ext
-                            break
+                    if os.path.exists(c): target_path = c; break
+                    for ext in [".jpg", ".png", ".jpeg"]:
+                        if os.path.exists(c + ext): target_path = c + ext; break
                             
             if not os.path.exists(target_path):
-                return f"I couldn't find the image '{image_name_or_path}'... 😖"
+                return f"I couldn't find image '{image_name_or_path}'... 😖"
                 
-            # Set Wallpaper
-            # SPI_SETDESKWALLPAPER = 20, SPIF_UPDATEINIFILE = 0x01, SPIF_SENDWININICHANGE = 0x02
-            ctypes.windll.user32.SystemParametersInfoW(20, 0, os.path.abspath(target_path), 3)
-            return f"Wallpaper set to {os.path.basename(target_path)}! Does it look good? ✨"
+            abs_path = os.path.abspath(target_path)
+            
+            if os.name == 'nt':
+                import ctypes
+                ctypes.windll.user32.SystemParametersInfoW(20, 0, abs_path, 3)
+            else:
+                import sys
+                if sys.platform == 'darwin':
+                    # macOS wallpaper support
+                    script = f'tell application "System Events" to set picture of every desktop to POSIX file "{abs_path}"'
+                    subprocess.run(["osascript", "-e", script], check=False)
+                else:
+                    # Basic Linux (GNOME) support
+                    subprocess.run(["gsettings", "set", "org.gnome.desktop.background", "picture-uri", f"file://{abs_path}"], check=False)
+                    subprocess.run(["gsettings", "set", "org.gnome.desktop.background", "picture-uri-dark", f"file://{abs_path}"], check=False)
+
+            return f"Wallpaper set to {os.path.basename(abs_path)}! Does it look good? ✨"
             
         except Exception as e:
-            return f"Start-up failed... I mean, wallpaper change failed: {e}"
+            return f"Wallpaper change failed: {e}"
 
     # --- ADDITIONAL CAPABILITIES ---
     def check_weather(self, city: str = "") -> str:

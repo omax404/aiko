@@ -169,6 +169,7 @@ async def run_telegram_bot():
 
 async def start_all_satellites():
     """Launch all satellites within the same cluster loop."""
+    await asyncio.sleep(2) # Give the Hub a moment to bind to the port
     logger.info("🛰️ Launching Neural Satellites (Consolidated Mode)...")
     asyncio.create_task(run_discord_bot())
     asyncio.create_task(run_telegram_bot())

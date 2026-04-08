@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y \
     libsndfile1 \
     python3-dev \
     gcc \
+    texlive-latex-base \
+    texlive-latex-extra \
+    texlive-fonts-recommended \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python requirements
