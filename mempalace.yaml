@@ -1,0 +1,24 @@
+wing: Aiko-desktop
+description: "Aiko Desktop Agent - The Hero v3.0 Cognitive Matrix"
+rooms:
+  - name: core
+    description: "Core logic, neural hub, and orchestration"
+    keywords: ["hub", "brain", "orchestrator", "engine", "neural"]
+  - name: voice
+    description: "TTS, Pocket-TTS, and audio processing"
+    keywords: ["tts", "voice", "audio", "kyutai", "wav"]
+  - name: integration
+    description: "Discord, Telegram, and external APIs"
+    keywords: ["discord", "telegram", "bot", "token", "webhook"]
+  - name: ui
+    description: "Tauri, React, and Frontend components"
+    keywords: ["tauri", "vite", "react", "component", "css"]
+  - name: memory
+    description: "RAG, ChromaDB, and persistent storage"
+    keywords: ["chroma", "rag", "memory", "database", "save"]
+  - name: security
+    description: "Cipher, policy, and sandbox logic"
+    keywords: ["cipher", "security", "jailbreak", "sandbox", "encrypt"]
+  - name: knowledge
+    description: "Long-term data and learned entities"
+    keywords: ["fact", "learning", "knowledge", "observation"]

@@ -527,6 +527,14 @@ async def on_startup(app):
     asyncio.create_task(memory_autosave_loop())
     logger.info("💾 Memory auto-save started")
 
+    # MemPalace Wake-up & Indexing
+    if hasattr(rag, 'mempalace') and rag.mempalace.is_available():
+        _loop = asyncio.get_running_loop()
+        logger.info("🌅 Palace Wake-up sequence initiated...")
+        asyncio.create_task(_loop.run_in_executor(None, rag.mempalace.wake_up))
+        # Optional: Mine the project on startup to ensure latest files are indexed
+        asyncio.create_task(_loop.run_in_executor(None, rag.mempalace.mine_project, "./"))
+
     # Start proactive agent loop
     asyncio.create_task(proactive_agent.start_loop())
     logger.info("👁️ Proactive Agent loop started")

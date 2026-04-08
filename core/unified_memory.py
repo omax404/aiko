@@ -382,6 +382,19 @@ class UnifiedMemoryManager:
 
         self.history[user_id].append(entry)
 
+        # File into MemPalace for high-recall long-term storage
+        try:
+            from core.mempalace_bridge import get_mempalace_rag
+            mp = get_mempalace_rag()
+            if mp.is_available():
+                mp.add_memory(
+                    text=f"{role.upper()}: {content}",
+                    metadata={"user_id": user_id, "source": "chat_history"},
+                    room="knowledge"
+                )
+        except Exception as e:
+            logger.error(f"[Memory] Palace filing error: {e}")
+
         # Keep only last 50 messages per user
         if len(self.history[user_id]) > 50:
             self.history[user_id] = self.history[user_id][-50:]

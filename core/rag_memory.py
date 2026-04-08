@@ -9,6 +9,7 @@ import uuid
 import time
 import requests
 import logging
+from .mempalace_bridge import MemPalaceRAG
 from functools import lru_cache
 from dotenv import load_dotenv
 
@@ -31,6 +32,8 @@ class RAGMemorySystem:
         self.ef = None  # Embedding Function
         self._initialized = False
         self.remote_url = REMOTE_RAG_URL
+        self.use_mempalace = True # Dynamic switch
+        self.mempalace = MemPalaceRAG()
             
     def _initialize(self):
         """Initialize ChromaDB or prepare remote client."""
@@ -38,6 +41,15 @@ class RAGMemorySystem:
             logger.info(f" [RAG] 🔗 Connected to Remote Memory: {self.remote_url}")
             self._initialized = True
             return
+
+        if self.use_mempalace:
+            if self.mempalace.is_available():
+                logger.info(" [RAG] 🏰 Using MemPalace (High-Recall Architecture)")
+                self._initialized = True
+                return
+            else:
+                logger.warning(" [RAG] MemPalace fallback to standard ChromaDB.")
+
 
         logger.info(" [RAG] 📦 Initializing Local Memory System (ChromaDB)...")
         os.makedirs(os.path.dirname(CHROMA_PATH), exist_ok=True)
@@ -100,6 +112,10 @@ class RAGMemorySystem:
         """Add a text snippet to memory (Local or Remote)."""
         if not text.strip(): return
         self._ensure_initialized()
+
+        if self.use_mempalace and self.mempalace.is_available():
+            self.mempalace.add_memory(text, metadata)
+            return
         
         if self.remote_url:
             try:
@@ -124,6 +140,9 @@ class RAGMemorySystem:
         """Find relevant memories (Local or Remote)."""
         if not query.strip(): return ()
         self._ensure_initialized()
+
+        if self.use_mempalace and self.mempalace.is_available():
+            return self.mempalace.search_memory(query, n_results)
         
         if self.remote_url:
             try:
@@ -166,4 +185,6 @@ class RAGMemorySystem:
                 resp = requests.get(f"{self.remote_url}/status", timeout=2)
                 return resp.json().get("memory_count", 0)
             except: return 0
+        if self.use_mempalace and self.mempalace.is_available():
+            return self.mempalace.get_memory_count()
         return self.collection.count() if self.collection else 0

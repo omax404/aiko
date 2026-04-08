@@ -21,7 +21,6 @@ from .game_bridge import game_manager
 from .orchestrator import orchestrator
 from .sandbox_bridge import SandboxBridge
 from .mcp_bridge import mcp_bridge
-from execution.ollama_account_manager import OllamaAccountManager
 from .image_engine import ImageEngine
 
 load_dotenv()
@@ -44,6 +43,7 @@ VIDEO_PATTERN = re.compile(r'\[VIDEO\s*:\s*(.*?)\]', re.IGNORECASE)
 GAME_PATTERN = re.compile(r'\[GAME\s*:\s*(\w+)\s*\|\s*(.*?)\]', re.IGNORECASE)
 MCP_PATTERN  = re.compile(r'\[MCP\s*:\s*(\w+)\s*(?:\|\s*(.*?))?\]', re.IGNORECASE | re.DOTALL)
 IMAGE_PATTERN = re.compile(r'\[IMAGE\s*:\s*(.*?)\]', re.IGNORECASE)
+RECALL_PATTERN = re.compile(r'\[RECALL\s*:\s*(.*?)(?:\s*\|\s*(.*?))?\]', re.IGNORECASE)
 
 # Connection pool - shared across all instances
 _session_pool = None
@@ -88,7 +88,6 @@ class AikoBrain:
         self.bridge = action_bridge
         self.obsidian = obsidian
         self.sandbox = SandboxBridge()
-        self.ollama_manager = OllamaAccountManager()
         self.image_engine = ImageEngine()
         self.comp_agent = None
         self.model = config.get("MODEL_NAME")
@@ -161,14 +160,19 @@ class AikoBrain:
         if self.on_thinking:
             self.on_thinking(True)
 
-        # RAG Context - offloaded to thread
+        # RAG Context - offloaded to thread (Enhanced for MemPalace)
         rag_context = ""
         if self.rag and self.rag.is_available():
             try:
                 loop = asyncio.get_running_loop()
-                results = await loop.run_in_executor(None, self.rag.search_memory, message, 1)
+                results = await loop.run_in_executor(None, self.rag.search_memory, message, 5)
                 if results:
-                    rag_context = "\n[MEMORIES]:\n" + results[0]['text']
+                    rag_context = "\n[RECALLED MEMORIES]:\n"
+                    for i, res in enumerate(results, 1):
+                        meta = res.get('meta', {})
+                        source = meta.get('source', 'unknown')
+                        room = meta.get('room', 'general')
+                        rag_context += f"({i}) [{room} / {source}]: {res['text']}\n"
             except Exception as e:
                 logger.warning(f"RAG Async Search Error: {e}")
 
@@ -246,7 +250,8 @@ class AikoBrain:
 
     def _get_tools_prompt(self) -> str:
         """Get tools prompt - cached for performance."""
-        tools = """\n\n[TOOLS]:\nUse tags to control PC:\n[OPEN: app]\n[TYPE: text]\n[PRESS: key]\n[CLICK: x, y]\n[WAIT: seconds]\n[SCAN] (See screen)\n[WALLPAPER: image_name]\n[TASK: complex goal]\n[WEATHER: city]\n[MUSIC: action]\n[LETTER: message]\n[VTS_BG: name]\n[GAME: minecraft | command]\n[GAME: factorio | command]\n[IMAGE: descriptive prompt]"""
+        tools = """\n\n[TOOLS]:\nUse tags to control PC:\n[OPEN: app]\n[TYPE: text]\n[PRESS: key]\n[CLICK: x, y]\n[WAIT: seconds]\n[SCAN] (See screen)\n[WALLPAPER: image_name]\n[TASK: complex goal]\n[WEATHER: city]\n[MUSIC: action]\n[LETTER: message]\n[VTS_BG: name]\n[GAME: minecraft | command]\n[GAME: factorio | command]\n[IMAGE: descriptive prompt]
+[RECALL: question | room] (Search my memory palace)"""
 
         if self.latex:
             tools += "\n[LATEX: code] (Compile LaTeX to PDF)"
@@ -414,6 +419,19 @@ Use MCP tools whenever Master asks about his PC state, files, or wants you to re
                         observations.append(f"[MCP ERROR] {tool_name}: {e}")
                 else:
                     observations.append(f"[MCP] Unknown tool: {tool_name}")
+
+            for match in RECALL_PATTERN.finditer(text):
+                query = match.group(1).strip()
+                room = match.group(2).strip() if match.group(2) else None
+                if self.rag and hasattr(self.rag, 'mempalace'):
+                    res = self.rag.mempalace.search_memory(query, n_results=5, room=room)
+                    if res:
+                        obs = f"\n[RECALL RESULT for '{query}']:\n"
+                        for i, r in enumerate(res, 1):
+                            obs += f"({i}) [{r['meta']['room']}]: {r['text']}\n"
+                        observations.append(obs)
+                    else:
+                        observations.append(f"[System: No specific memories found for '{query}']")
 
         except Exception as e:
             observations.append(f"Tool Error: {e}")
