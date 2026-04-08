@@ -493,7 +493,7 @@ Use MCP tools whenever Master asks about his PC state, files, or wants you to re
 
                     full = ""
                     cur = ""
-                    async for line in resp.content.iter_lines():
+                    async for line in resp.content:
                         if not line:
                             continue
                         

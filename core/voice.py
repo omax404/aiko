@@ -1,39 +1,23 @@
-"""
-AIKO VOICE ENGINE (POCKET-TTS)
-Optimized for high-speed local inference using Torch-based PCM generation.
-"""
 import os
 import asyncio
 import time
 import logging
-import torch
-import scipy.io.wavfile
-from pocket_tts import TTSModel
+import aiohttp
 
 # Set up logging
 logger = logging.getLogger("Voice")
+POCKET_TTS_API = "http://localhost:8000/tts"
 
 class VoiceEngine:
     def __init__(self):
-        self.is_ready = False
+        self.is_ready = True
         self.is_speaking = False
         self.output_dir = os.path.join(os.getcwd(), "data", "voices")
         os.makedirs(self.output_dir, exist_ok=True)
         
-        try:
-            logger.info("📡 Loading Pocket-TTS Model (this may take a moment)...")
-            self.model = TTSModel.load_model()
-            # Loading CUSTOM CLONED AUDIO using the converted WAV format for Kyutai tensor compatibility
-            clone_path = os.path.join(os.getcwd(), "voice_preview_yuki.wav")
-            logger.info(f"📡 Generating Voice State from clone: {clone_path}")
-            if os.path.exists(clone_path):
-                self.voice_state = self.model.get_state_for_audio_prompt(clone_path)
-            else:
-                self.voice_state = self.model.get_state_for_audio_prompt("alba")
-            self.is_ready = True
-            logger.info("✅ Pocket-TTS Engine Loaded & Ready with Yuki's Voice Clone.")
-        except Exception as e:
-            logger.error(f"❌ Failed to load Pocket-TTS: {e}")
+        # We always keep the uncompressed wav mapping for Cloud API upload parameters
+        self.clone_path = os.path.join(os.getcwd(), "voice_preview_yuki.wav")
+        logger.info("✅ Voice Engine switched to HTTP Cloud Architecture (Kyutai REST)")
 
     def is_available(self) -> bool:
         return self.is_ready
@@ -75,26 +59,33 @@ class VoiceEngine:
             filename = f"voice_{int(time.time() * 1000)}.wav"
             target_path = os.path.join(self.output_dir, filename)
             
-            # Generate PCM data in a background thread to keep the HUD responsive
-            logger.info(f"🔊 Generating speech: '{clean_text[:30]}...'")
-            audio_tensor = await asyncio.to_thread(self.model.generate_audio, self.voice_state, clean_text)
+            logger.info(f"🔊 Requesting speech from hardware accelerator: '{clean_text[:30]}...'")
             
-            # Save using scipy as suggested in the docs
-            await asyncio.to_thread(
-                scipy.io.wavfile.write, 
-                target_path, 
-                self.model.sample_rate, 
-                audio_tensor.numpy()
-            )
-
-            if on_audio and os.path.exists(target_path):
-                if asyncio.iscoroutinefunction(on_audio):
-                    await on_audio(filename)
-                else:
-                    on_audio(filename)
-                    
+            async with aiohttp.ClientSession() as session:
+                data = aiohttp.FormData()
+                data.add_field('text', clean_text)
+                
+                # Attach the physical clone wav directly to the REST pipeline
+                if os.path.exists(self.clone_path):
+                    data.add_field('voice_wav', open(self.clone_path, 'rb'), filename='clone.wav', content_type='audio/wav')
+                
+                async with session.post(POCKET_TTS_API, data=data, timeout=60) as resp:
+                    if resp.status == 200:
+                        content = await resp.read()
+                        with open(target_path, "wb") as f:
+                            f.write(content)
+                            
+                        if on_audio and os.path.exists(target_path):
+                            if asyncio.iscoroutinefunction(on_audio):
+                                await on_audio(filename)
+                            else:
+                                on_audio(filename)
+                    else:
+                        err_text = await resp.text()
+                        logger.error(f"❌ Pocket-TTS server error: {resp.status} {err_text}")
+                        
         except Exception as e:
-            logger.error(f"❌ Voice generation error: {e}")
+            logger.error(f"❌ Voice REST error: {e}")
         finally:
             self.is_speaking = False
 
