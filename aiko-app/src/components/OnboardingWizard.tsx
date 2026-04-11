@@ -14,8 +14,8 @@ export function OnboardingWizard() {
   // Assume hubUrl is known or we post to /api/settings if we can.
   // Actually, since this is a React component, we can use the backend proxy or rely on `updateApiConfig` 
   const hubUrl = (typeof window !== 'undefined' && !!(window as any).__TAURI__) 
-      ? 'http://127.0.0.1:8000' 
-      : (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8000');
+      ? 'http://127.0.0.1:8080' 
+      : (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8080');
 
   const handleComplete = async () => {
     if (!username) { setError("I need to know what to call you!"); return; }

@@ -58,13 +58,13 @@ fn log_error(app: tauri::AppHandle, message: String, stack: String) {
 /// Called by frontend to check if the Neural Hub is alive
 #[tauri::command]
 async fn check_hub_status() -> Result<bool, String> {
-    Ok(process_manager::check_hub_health("127.0.0.1", 8000).await)
+    Ok(process_manager::check_hub_health("127.0.0.1", 8080).await)
 }
 
 /// Called by frontend to get startup progress
 #[tauri::command]
 async fn get_startup_status() -> Result<String, String> {
-    if process_manager::check_hub_health("127.0.0.1", 8000).await {
+    if process_manager::check_hub_health("127.0.0.1", 8080).await {
         Ok("online".to_string())
     } else {
         Ok("starting".to_string())
@@ -139,46 +139,66 @@ pub fn run() {
                 // Store ProcessManager in Tauri state for commands
                 app.manage(pm.clone());
 
-                // Step 1: Kill stale processes (instant via sysinfo)
-                println!("[Aiko/Rust] Cleaning stale processes...");
-                pm.cleanup_stale_processes();
-
-                // Step 2: Start Ollama
-                println!("[Aiko/Rust] Starting Ollama...");
-                pm.start_ollama();
-
-                // Step 3: Start Neural Hub
-                println!("[Aiko/Rust] Starting Neural Hub...");
-                match pm.start_hub() {
-                    Ok(_) => println!("[Aiko/Rust] Neural Hub spawned"),
-                    Err(e) => eprintln!("[Aiko/Rust] Hub error: {}", e),
-                }
-
-                // Step 4: Wait for hub in background, then start bots
-                let pm_async = pm.clone();
-                std::thread::spawn(move || {
+                // Step 1: Check if Hub is already alive (launched by AikoLauncher.py)
+                let hub_already_alive = {
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     rt.block_on(async {
-                        println!("[Aiko/Rust] Waiting for Neural Hub health...");
-                        let ready = process_manager::wait_for_hub("127.0.0.1", 8000, 150).await;
-                        if ready {
-                            println!("[Aiko/Rust] Neural Hub ONLINE — starting satellites");
-                            pm_async.start_bridge();
-                            // Small delay to let bridge init
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                            pm_async.start_bots();
-                            println!("[Aiko/Rust] ALL SYSTEMS GO");
+                        process_manager::check_hub_health("127.0.0.1", 8080).await
+                    })
+                };
 
-                            // Start process monitoring with auto-restart
-                            let pm_monitor = pm_async.clone();
-                            tokio::spawn(async move {
-                                pm_monitor.start_monitoring().await;
-                            });
-                        } else {
-                            eprintln!("[Aiko/Rust] CRITICAL: Hub failed to start after 30s");
-                        }
+                if hub_already_alive {
+                    println!("[Aiko/Rust] Neural Hub already online — skipping process startup");
+
+                    // Still start monitoring in background
+                    let pm_monitor = pm.clone();
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async {
+                            println!("[Aiko/Rust] ALL SYSTEMS GO (external launcher mode)");
+                        });
                     });
-                });
+                } else {
+
+                    // Step 2: Kill stale processes (only when we need to do a cold start)
+                    println!("[Aiko/Rust] Cleaning stale processes...");
+                    pm.cleanup_stale_processes();
+
+                    // Step 3: Start Ollama
+                    println!("[Aiko/Rust] Starting Ollama...");
+                    pm.start_ollama();
+
+                    // Step 4: Start Neural Hub
+                    println!("[Aiko/Rust] Starting Neural Hub...");
+                    match pm.start_hub() {
+                        Ok(_) => println!("[Aiko/Rust] Neural Hub spawned"),
+                        Err(e) => eprintln!("[Aiko/Rust] Hub error: {}", e),
+                    }
+
+                    // Step 5: Wait for hub in background, then start bots
+                    let pm_async = pm.clone();
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async {
+                            println!("[Aiko/Rust] Waiting for Neural Hub health...");
+                            let ready = process_manager::wait_for_hub("127.0.0.1", 8080, 150).await;
+                            if ready {
+                                println!("[Aiko/Rust] Neural Hub ONLINE — starting satellites");
+                                pm_async.start_bridge();
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                pm_async.start_bots();
+                                println!("[Aiko/Rust] ALL SYSTEMS GO");
+
+                                let pm_monitor = pm_async.clone();
+                                tokio::spawn(async move {
+                                    pm_monitor.start_monitoring().await;
+                                });
+                            } else {
+                                eprintln!("[Aiko/Rust] CRITICAL: Hub failed to start after 30s");
+                            }
+                        });
+                    });
+                }
 
                 // Store PM for cleanup on exit
                 let pm_exit = pm.clone();

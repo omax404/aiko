@@ -11,7 +11,7 @@ import re
 
 logger = logging.getLogger("BotManager")
 
-HUB_URL = "http://127.0.0.1:8000"
+HUB_URL = "http://127.0.0.1:8080"
 
 # --- Shared Helpers ---
 async def get_hub_response(message: str, user_id: str, attachments: list = None):
@@ -104,8 +104,18 @@ async def run_discord_bot():
                 if audio_file: files.append(audio_file)
                 if latex_file: files.append(latex_file)
                 
-                if files: await message.reply(response, files=files)
-                else: await message.reply(response)
+                # Discord has a 2000 char limit
+                if len(response) > 1900:
+                    response = response[:1900] + "..."
+                
+                try:
+                    if files: await message.reply(response, files=files)
+                    else: await message.reply(response)
+                except Exception as reply_err:
+                    logger.error(f"Discord reply error: {reply_err}")
+                    try:
+                        await message.reply("I had something to say but Discord cut me off... 😤")
+                    except: pass
 
     try:
         await bot.start(token)

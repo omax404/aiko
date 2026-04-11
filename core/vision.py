@@ -84,6 +84,17 @@ class VisionEngine:
         except Exception as e:
             return f"Error analyzing file: {e}"
 
+    async def analyze_base64(self, b64_str: str) -> str:
+        """Analyze a base64 encoded image string."""
+        import base64
+        try:
+            image_data = base64.b64decode(b64_str)
+            img = Image.open(io.BytesIO(image_data))
+            return await self._analyze(img)
+        except Exception as e:
+            logger.error(f"Base64 Analysis Error: {e}")
+            return "I tried to look, but the image data is corrupted, Master."
+
     async def _analyze(self, image: Image.Image) -> str:
         """Send image to Moondream Cloud or local Ollama fallback."""
         if API_KEY:
@@ -141,14 +152,18 @@ class VisionEngine:
                 # Ollama Style
                 payload = {
                     "model": model,
-                    "prompt": "Describe this image briefly. What am I looking at?",
+                    "prompt": "Describe this image in detail. What objects, text, or actions are visible?",
                     "images": [img_str],
                     "stream": False
                 }
                 def _req():
-                    resp = requests.post(f"http://127.0.0.1:11434/api/generate", json=payload, timeout=30)
-                    resp.raise_for_status()
-                    return resp.json().get("response", "I see something, but I can't quite describe it, Master.")
+                    try:
+                        resp = requests.post(f"http://127.0.0.1:11434/api/generate", json=payload, timeout=30)
+                        resp.raise_for_status()
+                        return resp.json().get("response", "I see something, but I can't quite describe it, Master.")
+                    except Exception as e:
+                        logger.error(f"Ollama internal error: {e}")
+                        return f"Ollama is having trouble seeing this: {e}"
             
             return await loop.run_in_executor(None, _req)
         except Exception as e:

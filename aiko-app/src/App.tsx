@@ -294,7 +294,7 @@ function App() {
     document.documentElement.style.setProperty('--acc-soft', `${themeColor}1f`);
     document.documentElement.style.setProperty('--acc-glow', `${themeColor}40`);
 
-    try { connect('http://127.0.0.1:8000'); } catch (e) { }
+    try { connect('http://127.0.0.1:8080'); } catch (e) { }
     fetchBridgeStatus();
     loadSessions();
     const t = setInterval(() => fetchBridgeStatus(), 30000);

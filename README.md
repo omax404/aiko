@@ -127,11 +127,15 @@ Aiko Desktop/
 - **Telegram Bot** - Group chat support
 
 ### Tools
+- **Spotify Hub** - Playback awareness & music mood reactions
+- **Direct Vision** - Screens and images processed natively by Gemma 4
 - **MCP Bridge** - File system, clipboard, process management
 - **Sandbox** - Safe Python code execution
 - **OpenClaw** - Delegate complex coding tasks
 - **Image Gen** - AI image generation
 - **LaTeX** - Math to PDF conversion
+- **Auto-Janitor** - Automated 6h/24h cache cleanup & log rotation
+- **Status API** - Diagnostics at `http://localhost:8000/api/status`
 
 ---
 

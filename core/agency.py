@@ -60,7 +60,7 @@ class AikoMultiPlatformBridge:
         """Load user profiles from JSON file."""
         if self.user_profiles_path.exists():
             try:
-                with open(self.user_profiles_path, "r") as f:
+                with open(self.user_profiles_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except:
                 return {}
@@ -69,7 +69,7 @@ class AikoMultiPlatformBridge:
     def _save_user_profiles(self):
         """Save user profiles to JSON file."""
         self.user_profiles_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.user_profiles_path, "w") as f:
+        with open(self.user_profiles_path, "w", encoding="utf-8") as f:
             json.dump(self.user_profiles, f, indent=2)
 
     def _detect_gender_from_name(self, first_name: str) -> str:

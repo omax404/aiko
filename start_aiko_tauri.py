@@ -26,7 +26,7 @@ def check_hub_alive(host="127.0.0.1", port=8000):
     """Pings the Neural Hub status endpoint."""
     try:
         conn = http.client.HTTPConnection(host, port, timeout=5)
-        conn.request("GET", "/status")
+        conn.request("GET", "/api/status")
         resp = conn.getresponse()
         return resp.status == 200
     except:
@@ -47,8 +47,8 @@ def start_aiko_tauri():
         subprocess.run(f'taskkill /F /IM python.exe /T /FI "PID ne {current_pid}"', shell=True, capture_output=True, creationflags=NO_WINDOW, check=False)
         subprocess.run('taskkill /F /IM ollama.exe /T', shell=True, capture_output=True, creationflags=NO_WINDOW, check=False)
         
-        # Kill whatever is on port 1422 (Vite), 8080 (Hub), and 8000 (Pocket-TTS)
-        for port in [1422, 1420, 8080, 8000, 8765]:
+        # Kill whatever is on port 1422 (Vite) and 8000 (Unified Hub)
+        for port in [1422, 1420, 8000, 8765]:
             cmd = f'powershell -Command "Stop-Process -Id (Get-NetTCPConnection -LocalPort {port}).OwningProcess -Force -ErrorAction SilentlyContinue"'
             subprocess.run(cmd, shell=True, creationflags=NO_WINDOW, check=False)
             
@@ -83,8 +83,8 @@ def start_aiko_tauri():
         else:
             print(" [OK] LLM is now ready.")
 
-    # 2. Start Neural Hub (Now on 8080) — hidden, logs to file
-    print(" Starting Neural Hub (Brain)...")
+    # 2. Start Unified Neural Hub (Port 8000) — hidden, logs to file
+    print(" Starting Neural Hub (Brain + Voice)...")
     hub_log = open(".logs/neural_hub.log", "w")
     subprocess.Popen(
         [sys.executable, "core/neural_hub.py"],
@@ -92,16 +92,9 @@ def start_aiko_tauri():
         creationflags=NO_WINDOW
     )
 
-    # 3. Start Pocket-TTS Microservice (Port 8000)
-    print(" Starting Kyutai Voice Subsystem...")
-    tts_log = open(".logs/pocket_tts.log", "w")
-    # 'uvx' routes dynamically through the python resolver, shell=True helps find path easily on Windows
-    subprocess.Popen(
-        "uvx pocket-tts serve",
-        shell=True,
-        stdout=tts_log, stderr=tts_log,
-        creationflags=NO_WINDOW
-    )
+    # 3. Pocket-TTS is now managed INTERNALLY by the Hub for better stability and pre-warming.
+    print(" Syncing Internal Voice Subsystem...")
+    time.sleep(1)
 
     # Wait for Hub to be warm with active polling
     print(" Warming up the neural link (this might take a Few Seconds)...")
@@ -130,22 +123,9 @@ def start_aiko_tauri():
     )
     time.sleep(1)
 
-    # 4. Start Satellites — hidden
-    print(" Launching Discord Satellite...")
-    discord_log = open(".logs/discord_bot.log", "w")
-    subprocess.Popen(
-        [sys.executable, "discord_bot.py"],
-        stdout=discord_log, stderr=discord_log,
-        creationflags=NO_WINDOW
-    )
-
-    print(" Launching Telegram Satellite...")
-    telegram_log = open(".logs/telegram_bot.log", "w")
-    subprocess.Popen(
-        [sys.executable, "telegram_bot.py"],
-        stdout=telegram_log, stderr=telegram_log,
-        creationflags=NO_WINDOW
-    )
+    # 4. Satellites are now handled internally by Neural Hub startup.
+    # No need to launch them separately here.
+    print(" Satellites (Discord/Telegram) managed by Neural Hub.")
 
     # 5. Launch Tauri — this one gets a visible window (it IS the UI)
     print(" Opening Tauri Hero Dashboard UI...")

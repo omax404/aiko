@@ -29,7 +29,7 @@ export function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
     
     // Sync to backend config.json
     try {
-      await fetch('http://localhost:8000/api/settings', {
+      await fetch('http://localhost:8080/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

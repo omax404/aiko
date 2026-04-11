@@ -22,6 +22,9 @@ from .orchestrator import orchestrator
 from .sandbox_bridge import SandboxBridge
 from .mcp_bridge import mcp_bridge
 from .image_engine import ImageEngine
+from .utils import retry
+from .config_manager import config
+
 
 load_dotenv()
 logger = logging.getLogger("Brain")
@@ -44,6 +47,8 @@ GAME_PATTERN = re.compile(r'\[GAME\s*:\s*(\w+)\s*\|\s*(.*?)\]', re.IGNORECASE)
 MCP_PATTERN  = re.compile(r'\[MCP\s*:\s*(\w+)\s*(?:\|\s*(.*?))?\]', re.IGNORECASE | re.DOTALL)
 IMAGE_PATTERN = re.compile(r'\[IMAGE\s*:\s*(.*?)\]', re.IGNORECASE)
 RECALL_PATTERN = re.compile(r'\[RECALL\s*:\s*(.*?)(?:\s*\|\s*(.*?))?\]', re.IGNORECASE)
+MUSIC_PATTERN = re.compile(r'\[MUSIC\s*:\s*(.*?)\]', re.IGNORECASE)
+BIO_REGISTER_PATTERN = re.compile(r'\[BIO_REGISTER\]', re.IGNORECASE)
 
 # Connection pool - shared across all instances
 _session_pool = None
@@ -83,6 +88,9 @@ class AikoBrain:
         self.rag = rag_memory
         self.pc = pc_manager
         self.vision = vision_engine
+        self.suppress_speech = False  # New flag for selective silence
+        
+        self.model = config.get("MODEL_NAME", "deepseek-chat")
         self.vts = vts_connector
         self.latex = latex_engine
         self.bridge = action_bridge
@@ -133,9 +141,9 @@ class AikoBrain:
                 
                 # Handle async and sync callbacks safely
                 if asyncio.iscoroutinefunction(self.on_sentence):
-                    asyncio.create_task(self.on_sentence(text, emotion))
+                    asyncio.create_task(self.on_sentence(text, emotion, suppress_audio=self.suppress_speech))
                 else:
-                    self.on_sentence(text, emotion)
+                    self.on_sentence(text, emotion, suppress_audio=self.suppress_speech)
             except Exception as e:
                 logger.error(f"Sentence Callback Error: {e}")
 
@@ -151,8 +159,14 @@ class AikoBrain:
 
         if initial_images:
             processed_images, file_context = await self._process_attachments(initial_images)
+            
+            # Images are passed directly to the main LLM (Gemma 4 is multimodal)
+            # No need for a separate vision model — the brain can see
+            if processed_images:
+                file_context += f"\n[VISUAL_INPUT]: {len(processed_images)} image(s) attached. Describe what you see."
+
             if file_context:
-                message = f"{message}\n\n[FILE_CONTEXT]:\n{file_context}"
+                message = f"{message}\n\n[SENSORY_CONTEXT]:\n{file_context}"
 
         if save_input:
             self.memory.add_message(user_id, input_role, message)
@@ -198,6 +212,19 @@ class AikoBrain:
             if rag_context:
                 system_prompt += f"\n\n<relevant_memory_context>\n{rag_context[:1000]}\n</relevant_memory_context>"
 
+            # Add "Vibe Context" (Time + Music)
+            now = datetime.now()
+            vibe = f"\n\n<vibe_context>\n- TIME: {now.strftime('%H:%M')} ({'Night' if now.hour < 5 or now.hour > 21 else 'Day'})\n"
+            try:
+                from .spotify_bridge import spotify
+                track = spotify.get_current_track()
+                if track:
+                    vibe += f"- CURRENT_MUSIC: \"{track['track']}\" by {track['artist']}\n"
+            except:
+                pass
+            vibe += "</vibe_context>"
+            system_prompt += vibe
+
             messages = [{"role": "system", "content": system_prompt}]
 
             # Map history - slice to last 20 only
@@ -219,7 +246,7 @@ class AikoBrain:
             # Check for Tools - use compiled patterns
             has_tool = any(tag in text.upper() for tag in [
                 "[OPEN:", "[SCAN]", "[TYPE:", "[CLICK:", "[PRESS:", "[TASK:", "[LATEX:",
-                "[GAME:", "[RUN_PYTHON:", "[MCP:", "[IMAGE:"
+                "[GAME:", "[RUN_PYTHON:", "[MCP:", "[IMAGE:", "[BIO_REGISTER]", "[MUSIC:"
             ])
             if not has_tool:
                 orchestrator.emit_tool_result("Text_Reply", "Message complete.")
@@ -227,7 +254,7 @@ class AikoBrain:
                 break
 
             final_response = text
-            await self._execute_tools(text, observations, images_data)
+            await self._execute_tools(text, observations, images_data, user_id)
 
         # Process emotion
         from .emotion_engine import emotion_engine
@@ -240,6 +267,12 @@ class AikoBrain:
 
         # Save & Return
         self.memory.add_message(user_id, "assistant", cleaned_response)
+        
+        # --- LONG-TERM MEMORY (MemPalace) ---
+        if self.rag and self.rag.is_available():
+            mem_text = f"User ({user_id}): {message}\nAiko: {cleaned_response}"
+            # Commit to semantic archive
+            self.rag.add_memory(mem_text, metadata={"type": "conversation", "user_id": str(user_id), "room": "conversations"})
         state = emotion_engine.get_state()
         active_emotion = state["dominant_emotions"][0]
 
@@ -251,7 +284,9 @@ class AikoBrain:
     def _get_tools_prompt(self) -> str:
         """Get tools prompt - cached for performance."""
         tools = """\n\n[TOOLS]:\nUse tags to control PC:\n[OPEN: app]\n[TYPE: text]\n[PRESS: key]\n[CLICK: x, y]\n[WAIT: seconds]\n[SCAN] (See screen)\n[WALLPAPER: image_name]\n[TASK: complex goal]\n[WEATHER: city]\n[MUSIC: action]\n[LETTER: message]\n[VTS_BG: name]\n[GAME: minecraft | command]\n[GAME: factorio | command]\n[IMAGE: descriptive prompt]
-[RECALL: question | room] (Search my memory palace)"""
+[RECALL: question | room] (Search my memory palace)
+[BIO_REGISTER] (Register Master's face)
+[MUSIC: play/pause/skip/prev/now/volume 50/play song name] (Spotify control)"""
 
         if self.latex:
             tools += "\n[LATEX: code] (Compile LaTeX to PDF)"
@@ -284,6 +319,28 @@ Use MCP tools whenever Master asks about his PC state, files, or wants you to re
         is_admin = policy_engine.is_admin(user_id)
         
         try:
+            # --- [BIO_REGISTER] ---
+            if BIO_REGISTER_PATTERN.search(text):
+                orchestrator.emit_tool_call("BIO_REGISTER", "Scanning your face... Stay still, Master~")
+                from .biometrics import biometrics
+                loop = asyncio.get_running_loop()
+                success = await loop.run_in_executor(None, biometrics.register_master)
+                res = "✅ Biometric Registration Complete." if success else "❌ Registration failed."
+                observations.append(f"[TOOL_RESULT]: {res}")
+                orchestrator.emit_tool_result("BIO_REGISTER", res)
+
+            # --- [MUSIC: action] ---
+            for match in MUSIC_PATTERN.finditer(text):
+                action = match.group(1).strip()
+                orchestrator.emit_tool_call("MUSIC", f"Executing: {action}")
+                try:
+                    from .spotify_bridge import spotify
+                    res = spotify.execute_command(action)
+                except Exception as e:
+                    res = f"Music error: {e}"
+                observations.append(f"[TOOL_RESULT]: {res}")
+                orchestrator.emit_tool_result("MUSIC", res)
+
             for match in RUN_PYTHON_PATTERN.finditer(text):
                 code = match.group(1).strip()
                 if not is_admin:
@@ -436,39 +493,44 @@ Use MCP tools whenever Master asks about his PC state, files, or wants you to re
         except Exception as e:
             observations.append(f"Tool Error: {e}")
 
-    async def _process_attachments(self, attachment_urls: list) -> tuple:
-        """Process attachments with connection reuse."""
+    async def _process_attachments(self, attachment_paths_or_urls: list) -> tuple:
+        """Process local file paths or URLs for vision/context."""
         images = []
         context_parts = []
+        import base64
 
-        session = get_session()
-
-        for url in attachment_urls:
+        for source in attachment_paths_or_urls:
             try:
-                async with session.get(url) as resp:
-                    if resp.status != 200:
-                        continue
-                    content = await resp.read()
+                content = None
+                filename = os.path.basename(source)
+                
+                if os.path.exists(source):
+                    with open(source, 'rb') as f:
+                        content = f.read()
+                else:
+                    import aiohttp
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(source) as resp:
+                            if resp.status == 200:
+                                content = await resp.read()
 
-                    filename = url.split('/')[-1]
-                    mime_type = mimetypes.guess_type(filename)[0] or ""
+                if not content: continue
 
-                    if mime_type.startswith("image/"):
-                        b64 = base64.b64encode(content).decode("utf-8")
-                        images.append(b64)
-                        context_parts.append(f"[User attached image: {filename}]")
-                    elif mime_type.startswith("text/") or filename.endswith(('.py', '.js', '.json', '.md', '.txt')):
-                        try:
-                            text_content = content.decode('utf-8', errors='ignore')
-                            if len(text_content) > 5000:
-                                text_content = text_content[:5000] + "... [TRUNCATED]"
-                            context_parts.append(f"Content of {filename}:\n```\n{text_content}\n```")
-                        except:
-                            context_parts.append(f"[File attached: {filename} (Binary)]")
-                    else:
+                # Image Handling
+                if any(ext in source.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+                    b64 = base64.b64encode(content).decode('utf-8')
+                    images.append(b64)
+                    context_parts.append(f"[User attached image: {filename}]")
+                else:
+                    # Text/Code Handling
+                    try:
+                        text = content.decode('utf-8', errors='ignore')
+                        context_parts.append(f"Content of {filename}:\n```\n{text[:2000]}\n```")
+                    except:
                         context_parts.append(f"[File attached: {filename}]")
+
             except Exception as e:
-                logger.error(f"Error processing attachment {url}: {e}")
+                logger.error(f"Attachment Error {source}: {e}")
 
         return images, "\n".join(context_parts)
 

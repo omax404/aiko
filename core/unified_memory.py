@@ -395,9 +395,44 @@ class UnifiedMemoryManager:
         except Exception as e:
             logger.error(f"[Memory] Palace filing error: {e}")
 
-        # Keep only last 50 messages per user
-        if len(self.history[user_id]) > 50:
-            self.history[user_id] = self.history[user_id][-50:]
+        # Memory Compression & Archiving (Keep local history efficient)
+        if len(self.history[user_id]) > 40:
+            self._compress_history(user_id)
+
+    def _compress_history(self, user_id: str):
+        """Turn old conversation segments into a single semantic anchor."""
+        history = self.history[user_id]
+        if len(history) < 30: return
+
+        to_compress = history[:20]
+        remaining = history[20:]
+
+        summary_title = f"[MNEMONIC_CHRONICLE]"
+        summary_content = "\n".join([f"{m['role']}: {m['content'][:100]}..." for m in to_compress])
+        
+        # Archive the FULL text to MemPalace (High Recall)
+        try:
+            from core.mempalace_bridge import get_mempalace_rag
+            mp = get_mempalace_rag()
+            if mp.is_available():
+                full_archive_text = "CONVERSATION_ARCHIVE:\n" + "\n".join([f"{m['role']}: {m['content']}" for m in to_compress])
+                mp.add_memory(
+                    full_archive_text,
+                    metadata={"user_id": user_id, "type": "archived_chat"},
+                    room="conversations"
+                )
+        except: pass
+
+        # Replace first 20 with 1 summary entry
+        archive_entry = {
+            'role': 'system',
+            'content': f"{summary_title}: I've archived our earlier chat into the Palace. We discussed: {summary_content[:500]}",
+            'timestamp': to_compress[-1]['timestamp'],
+            'metadata': {'type': 'archive_summary'}
+        }
+        
+        self.history[user_id] = [archive_entry] + remaining
+        logger.info(f"[Memory] Compressed history for {user_id}. Palace archive created.")
 
         # Log important messages to thought stream
         if role == 'assistant' and len(content) > 100:

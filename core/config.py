@@ -49,7 +49,7 @@ class Config:
         # Load from file if exists
         if self.config_file.exists():
             try:
-                with open(self.config_file, 'r') as f:
+                with open(self.config_file, 'r', encoding="utf-8") as f:
                     file_config = json.load(f)
                     self._merge_config(self._config, file_config)
             except Exception as e:
@@ -102,7 +102,7 @@ class Config:
     def save(self):
         """Save configuration to file."""
         try:
-            with open(self.config_file, 'w') as f:
+            with open(self.config_file, 'w', encoding="utf-8") as f:
                 json.dump(self._config, f, indent=2)
         except Exception as e:
             print(f" [!] Failed to save config: {e}")

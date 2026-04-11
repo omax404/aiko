@@ -47,7 +47,32 @@ def clear_cache(target_dirs=None, max_log_size_mb=10):
             except Exception as e:
                 print(f" [X] Log rotation failed: {e}")
 
+    # 3. Clean Standard Aiko Dirs
+    for d in ['data/uploads', 'data/voices', 'data/temp']:
+        directory_janitor(d, max_age_hours=24)
+
     print(" [System] Cache Logistic: Cleanup Complete.")
+
+def directory_janitor(target_dir: str, max_age_hours: int = 24):
+    """Purges files in target_dir that are older than max_age_hours."""
+    path = Path(target_dir)
+    if not path.exists():
+        return
+        
+    now = time.time()
+    max_age_seconds = max_age_hours * 3600
+    count = 0
+    
+    try:
+        for f in path.iterdir():
+            if f.is_file():
+                if (now - f.stat().st_mtime) > max_age_seconds:
+                    f.unlink()
+                    count += 1
+        if count > 0:
+            print(f" [OK] Janitor purged {count} aged files from {target_dir}")
+    except Exception as e:
+        print(f" [X] Janitor failed in {target_dir}: {e}")
 
 def retry(
     max_attempts: int = 3,

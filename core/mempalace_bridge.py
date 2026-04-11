@@ -14,6 +14,13 @@ from mempalace.miner import get_collection, add_drawer, chunk_text
 
 logger = logging.getLogger("MemPalaceBridge")
 
+def safe_str(obj):
+    """Safely convert object to string for Windows logging."""
+    try:
+        return str(obj).encode('ascii', 'ignore').decode('ascii')
+    except:
+        return "[Unencodable String]"
+
 DEFAULT_PALACE = os.path.expanduser("~/.mempalace/palace")
 DEFAULT_WING = "Aiko-desktop"
 
@@ -45,7 +52,7 @@ class MemPalaceRAG:
             cmd_wakeup(args)
             logger.info(" [MemPalace] 🌅 Palace Wake-up Sequence Complete.")
         except Exception as e:
-            logger.error(f" [MemPalace] Wake-up Error: {e}")
+            logger.error(f" [MemPalace] Wake-up Error: {safe_str(e)}")
 
     def mine_project(self, project_dir: str = "./"):
         """Manually trigger a mine scan of the project."""
@@ -54,7 +61,7 @@ class MemPalaceRAG:
             mine(project_dir=project_dir, palace_path=self.palace_path, wing_override=self.wing, agent="Aiko")
             logger.info(f" [MemPalace] ⛏️ Finished mining: {project_dir}")
         except Exception as e:
-            logger.error(f" [MemPalace] Mine Error: {e}")
+            logger.error(f" [MemPalace] Mine Error: {safe_str(e)}")
 
     def is_available(self) -> bool:
         self._initialize()

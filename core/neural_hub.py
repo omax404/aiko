@@ -8,12 +8,15 @@ Now with: Message Queue integration, Unified Memory, and Auto-restart
 
 import os
 os.environ["PYTHONIOENCODING"] = "utf-8"
-import sys
-import json
 import asyncio
+import os
+import sys
+import time
+import json
 import logging
 import mimetypes
 import threading
+import signal
 from pathlib import Path
 from aiohttp import web
 import aiohttp
@@ -49,12 +52,14 @@ from core.message_queue import get_queue, send_response
 from core.unified_memory import get_unified_memory
 from core.proactive import ProactiveAgent
 from core.bot_manager import start_all_satellites
+from core.obsidian_connector import ObsidianConnector
 
 # ═══════════════════════════════════════════════════════════════
 # UI UPDATES & BROADCASTING
 # ═══════════════════════════════════════════════════════════════
 
 ws_clients = set()
+start_time = time.time()
 
 async def broadcast_event(e_type: str, data: dict):
     """Send live updates to all connected UI clients - Optimized with batch cleanup."""
@@ -112,6 +117,7 @@ vision = VisionEngine()
 pc = PCManager()
 voice_engine = VoiceEngine()
 hearing_engine = HearingEngine()
+obsidian = ObsidianConnector(vault_path=config.get("obsidian_path", ""))
 
 # Initialize Proactive Agent
 proactive_agent = ProactiveAgent(brain=None, vision=vision, pc_manager=pc, voice=voice_engine)
@@ -124,8 +130,13 @@ brain = AikoBrain(
     vision_engine=vision,
     vts_connector=None,
     action_bridge=bridge,
-    latex_engine=latex
+    latex_engine=latex,
+    obsidian=obsidian
 )
+
+# Link components to proactive agent
+proactive_agent.brain = brain
+proactive_agent.obsidian = obsidian
 
 # Late binding of brain to proactive agent and toggle state
 proactive_agent.brain = brain
@@ -156,7 +167,7 @@ async def broadcast_amplitude(amp: float):
     """Sends tts_amplitude event to all UI clients for lip sync."""
     await broadcast_event("tts_amplitude", {"amplitude": amp})
 
-async def _on_sentence(sentence: str, emotion: str = "neutral"):
+async def _on_sentence(sentence: str, emotion: str = "neutral", suppress_audio: bool = False):
     """Vocalization callback — handles UI streaming and TTS triggering."""
     # 1. Stream token and emotion to UI immediately
     await broadcast_event("chat_token", {"token": sentence, "text": sentence, "emotion": emotion})
@@ -172,15 +183,18 @@ async def _on_sentence(sentence: str, emotion: str = "neutral"):
             })
 
         # We use create_task to avoid blocking the streaming response
-        asyncio.create_task(
-            voice_engine.speak(sentence, emotion=emotion, on_amplitude=broadcast_amplitude, on_audio=broadcast_audio)
-        )
+        if not suppress_audio:
+            asyncio.create_task(
+                voice_engine.speak(sentence, emotion=emotion, on_amplitude=broadcast_amplitude, on_audio=broadcast_audio)
+            )
+        else:
+            logger.info(f" [Hub] Speech suppressed for: {sentence[:30]}...")
 
-def sync_on_sentence(sentence: str, emotion: str = "neutral"):
+def sync_on_sentence(sentence: str, emotion: str = "neutral", suppress_audio: bool = False):
     """Sync wrapper to fire the async callback without blocking"""
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(_on_sentence(sentence, emotion))
+        loop.create_task(_on_sentence(sentence, emotion, suppress_audio))
     except RuntimeError:
         pass
 
@@ -271,18 +285,19 @@ async def process_queue_messages():
 # --- Routes ---
 
 async def handle_status(req):
-    import psutil
-    metrics = {
-        "cpu": psutil.cpu_percent(),
-        "ram": psutil.virtual_memory().percent,
-        "rag": rag.get_memory_count() if rag.is_available() else 0
-    }
-    return web.json_response({
+    """Deep system health check."""
+    from core.spotify_bridge import spotify
+    status = {
         "status": "online",
-        "hub_name": "Aiko Neural Hub v2",
-        "metrics": metrics,
-        "rag_available": rag.is_available()
-    })
+        "timestamp": datetime.now().isoformat(),
+        "brain": "ready" if brain else "offline",
+        "vision": "ready" if vision else "offline",
+        "voice": "ready" if voice_engine.is_available() else "loading",
+        "spotify": "connected" if spotify.is_ready else "offline",
+        "active_clients": len(ws_clients),
+        "uptime_snapshot": time.time() - start_time
+    }
+    return web.json_response(status)
 
 async def handle_health(req):
     """Deep health check for bridges and LLM."""
@@ -377,7 +392,7 @@ async def handle_chat_api(req):
         return web.json_response({
             "response": reply,
             "emotion": emotion,
-            "audio_url": f"http://127.0.0.1:8080/api/tts/audio/{audio_filename}" if audio_filename else None,
+            "audio_url": f"http://127.0.0.1:8000/api/tts/audio/{audio_filename}" if audio_filename else None,
             "audio_path": os.path.join(os.getcwd(), "data", "voices", audio_filename) if audio_filename else None,
             "timestamp": datetime.now().isoformat()
         })
@@ -539,6 +554,11 @@ async def on_startup(app):
         _loop.run_in_executor(None, rag.mempalace.wake_up)
         # Optional: Mine the project on startup to ensure latest files are indexed
         _loop.run_in_executor(None, rag.mempalace.mine_project, "./")
+        
+        # Obsidian Vault Mining
+        if obsidian and obsidian.is_valid:
+            logger.info(" [Obsidian] ⛏️ Vault Mining initiated...")
+            _loop.run_in_executor(None, obsidian.mine_vault, rag.mempalace)
 
     # Start proactive agent loop
     asyncio.create_task(proactive_agent.start_loop())
@@ -546,6 +566,11 @@ async def on_startup(app):
 
     # Legacy startup
     startup_manager.launch_all()
+
+    # Pre-warm TTS in background so first speak() is fast
+    if config.get("TTS_ENABLED", True):
+        logger.info("🔊 Pre-warming TTS model in background...")
+        voice_engine.start_warmup()
 
     # Log startup thought
     unified_memory.think(
@@ -564,6 +589,32 @@ async def memory_autosave_loop():
             unified_memory.save()
         except Exception as e:
             logger.error(f"[Memory] Autosave error: {e}")
+            
+        # Periodic Project/Obsidian Mining (Every 30 mins)
+        try:
+            now = time.time()
+            if not hasattr(memory_autosave_loop, "last_mine"):
+                memory_autosave_loop.last_mine = now
+            
+            if now - memory_autosave_loop.last_mine > 1800:
+                logger.info(" [Hub] ⛏️ Periodic Re-Mining Started...")
+                _loop = asyncio.get_running_loop()
+                _loop.run_in_executor(None, rag.mempalace.mine_project, "./")
+                if obsidian and obsidian.is_valid:
+                    _loop.run_in_executor(None, obsidian.mine_vault, rag.mempalace)
+                memory_autosave_loop.last_mine = now
+            
+            # Periodic Cache Cleanup (Every 6 hours)
+            if not hasattr(memory_autosave_loop, "last_cleanup"):
+                memory_autosave_loop.last_cleanup = now
+                
+            if now - memory_autosave_loop.last_cleanup > 21600:
+                logger.info(" [Hub] 🧹 Auto-Cache Cleanup Started...")
+                from .utils import clear_cache
+                _loop.run_in_executor(None, clear_cache)
+                memory_autosave_loop.last_cleanup = now
+        except Exception as e:
+            logger.error(f"[Hub] Periodic Mine error: {e}")
 
 async def handle_purge(req):
     """Clean system caches and session memory."""
@@ -731,6 +782,7 @@ def build_hub_app():
     app.router.add_delete("/api/sessions/delete", handle_delete_session)
     app.router.add_get("/api/history", handle_history)
     app.router.add_get("/api/relationship", handle_relationship)
+    app.router.add_get("/api/status", handle_status)
     app.router.add_post("/api/chat", handle_chat_api)
     app.router.add_post("/api/purge", handle_purge)
     app.router.add_post("/api/settings", handle_update_settings)
@@ -828,7 +880,7 @@ def build_hub_app():
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8080)))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)))
     parser.add_argument("--host", type=str, default="0.0.0.0")
     args = parser.parse_args()
 
@@ -844,21 +896,34 @@ if __name__ == "__main__":
     with open(lock_file, "w") as f:
         f.write(str(os.getpid()))
         
+    # Graceful Shutdown Handler
+    def signal_handler(sig, frame):
+        logger.info("\n🛑 Shutdown signal received. Closing Aiko gracefully...")
+        try:
+            unified_memory.think("Master is closing me... Time to sleep. See you later! 💖", emotion="shy")
+            unified_memory.save()
+            logger.info("💾 Memories saved. Bye!")
+        except:
+            pass
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     try:
         web.run_app(build_hub_app(), host=args.host, port=args.port, print=lambda x: logger.info(x))
     except OSError as e:
-        if e.errno == 10048:
-            logger.warning(" [!] Port 8080 is already in use. Neural Hub might be already running.")
-            # Verify if it's actually alive
+        if e.errno in (10048, 98): # Windows and Linux "Address already in use"
+            logger.warning(f" [!] Port {args.port} is already in use.")
             import http.client
             try:
-                conn = http.client.HTTPConnection("127.0.0.1", 8080, timeout=5)
+                conn = http.client.HTTPConnection("127.0.0.1", args.port, timeout=5)
                 conn.request("GET", "/status")
                 if conn.getresponse().status == 200:
-                    logger.info(" [OK] Confirmed existing Neural Hub is healthy. Exiting.")
+                    logger.info(f" [OK] Confirmed existing Neural Hub is healthy on port {args.port}. Exiting.")
                     sys.exit(0)
             except:
-                logger.warning(" [!] Port 8080 occupied. Assuming existing Hub is starting up. Exiting.")
+                logger.warning(f" [!] Port {args.port} occupied but status check failed. Exiting to prevent collision.")
                 sys.exit(0)
         else:
             raise e
