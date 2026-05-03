@@ -511,6 +511,8 @@ Use MCP tools whenever Master asks about his PC state, files, or wants you to re
         context_parts = []
         import base64
 
+        IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.avif'}
+
         for source in attachment_paths_or_urls:
             try:
                 content = None
@@ -528,11 +530,16 @@ Use MCP tools whenever Master asks about his PC state, files, or wants you to re
 
                 if not content: continue
 
-                # Image Handling
-                if any(ext in source.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+                # Determine if this is an image using extension OR mimetypes
+                ext = os.path.splitext(source.lower())[1]
+                mime_type, _ = mimetypes.guess_type(source)
+                is_image = ext in IMAGE_EXTENSIONS or (mime_type and mime_type.startswith('image/'))
+
+                if is_image:
                     b64 = base64.b64encode(content).decode('utf-8')
                     images.append(b64)
                     context_parts.append(f"[User attached image: {filename}]")
+                    logger.info(f"[Attachment] Processed image: {filename} ({len(content)} bytes)")
                 else:
                     # Text/Code Handling
                     try:
@@ -648,9 +655,17 @@ Use MCP tools whenever Master asks about his PC state, files, or wants you to re
             url = "http://127.0.0.1:11434/api/chat"
 
             ollama_msgs = []
+            # Find the index of the LAST user message to attach images to
+            last_user_idx = -1
+            if imgs:
+                for i in range(len(msgs) - 1, -1, -1):
+                    if msgs[i]["role"] == "user":
+                        last_user_idx = i
+                        break
+
             for i, m in enumerate(msgs):
                 om = {"role": m["role"], "content": m["content"]}
-                if imgs and m["role"] == "user" and i == len(msgs) - 1:
+                if imgs and i == last_user_idx:
                     om["images"] = imgs
                 ollama_msgs.append(om)
 
